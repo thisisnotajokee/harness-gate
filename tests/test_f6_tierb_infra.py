@@ -12,6 +12,7 @@ MASKOWAŁY SIĘ jako wynik kandydata. Każdy test pinuje jeden konkretny, cichy 
 * `prepare_variant_config` — bramka musi wstać na PRZYPIĘTYM porcie, a pośrednik musi być
   wpisany w konfigurację wariantu; własny blok `providers:` = odmowa, nie ciche doklejenie.
 """
+import json
 import os
 import shutil
 import subprocess
@@ -82,6 +83,83 @@ class CredentialDiscoveryTest(unittest.TestCase):
         self.assertEqual(tier_b._port_from_url("http://127.0.0.1:8645/v1"), "8645")
         self.assertEqual(tier_b._port_from_url("https://proxy.example/v1"), "443")
         self.assertEqual(tier_b._port_from_url(""), "")
+
+
+class DiagnostykaAwariiTest(unittest.TestCase):
+    """Robi 1 (2026-11-09): noga `infra_error` musi nieść PRZYCZYNĘ, nie tylko `rc`.
+
+    Stan wyjściowy: `run_task` zbierał `stderr_tail`/`stdout_tail`, ale `paired()` je odrzucało,
+    więc w artefakcie zostawało `rc=1` po 60,7 s i nic więcej — a awaria jest przejściowa, więc
+    „uruchom jeszcze raz i patrz" jej nie odtworzy. Redakcja jest warunkiem ZAPISU: piaskownica
+    dostaje klucz modelu, a komunikat błędu potrafi go powtórzyć.
+    """
+
+    @staticmethod
+    def _atrapy_sekretow():
+        """Atrapy budowane W LOCIE — w źródle nie może leżeć literał w kształcie klucza.
+
+        Dwa niezależne skanery słusznie blokują taki literał: `secretscan.sh` w kotwicy (blokuje
+        push) i skan wycieków wydania (blokuje build). One nie odróżnią atrapy od prawdziwego klucza
+        — i nie powinny. Sklejanie w runtime zachowuje test (kształt powstaje dopiero w pamięci),
+        a ze źródła znika materiał, który wygląda jak poświadczenie.
+        """
+        return ["sk-" + "a" * 20, "eyJ" + "b" * 30 + "." + "c" * 20, "y" * 44]
+
+    def test_redakcja_usuwa_wzorce_i_zachowuje_tresc(self):
+        import evidence
+        tajne = self._atrapy_sekretow()
+        tekst = ("Blad 401: klucz " + tajne[0] + "\nAuthorization: Bearer " + tajne[1] +
+                 "\napi_key: " + tajne[0] + "\ndlugi=" + tajne[2] + "\nkoniec bez zmian")
+        wynik = evidence.redact(tekst)
+        for t in tajne:
+            self.assertNotIn(t, wynik, "wzorzec nie został zredagowany")
+        self.assertIn("Blad 401", wynik)
+        self.assertIn("koniec bez zmian", wynik)
+
+    def test_redakcja_dokladnych_wartosci(self):
+        import evidence
+        wartosc = "tajne" + "-" + "haslo" + "-" + "1" * 6          # sklejane: patrz _atrapy_sekretow
+        wynik = evidence.redact(f"k: {wartosc}, dalej tekst", extra_values=(wartosc,))
+        self.assertNotIn(wartosc, wynik)
+        self.assertIn("dalej tekst", wynik)
+
+    def _leg_awarii(self):
+        return {"status": "infra_error", "rc": 1, "wall_s": 60.7,
+                "stderr_tail": f"Blad providera 401: klucz {self._atrapy_sekretow()[0]} odrzucony",
+                "stdout_tail": ""}
+
+    def test_ogon_awarii_zapisuje_zredagowany_slad(self):
+        with mock.patch.object(tier_b, "EVAL", tempfile.mkdtemp(prefix="eval-test-")):
+            wpis = tier_b.ogon_awarii(self._leg_awarii(), "B-900", "kandydat")
+            self.assertTrue(os.path.isfile(wpis["plik"]), wpis)
+            tresc = open(wpis["plik"], encoding="utf-8").read()
+        self.assertIn("rc=1", tresc, "ślad musi nieść kod wyjścia")
+        self.assertIn("401", tresc, "ślad musi nieść treść błędu (po to istnieje)")
+        atrapa = self._atrapy_sekretow()[0]
+        self.assertNotIn(atrapa, tresc, "klucz NIE MOŻE trafić na dysk")
+        self.assertNotIn(atrapa, wpis["ogon"], "…ani do artefaktu")
+
+    def test_paired_zanotowuje_diagnostyke_tylko_dla_nogi_awarii(self):
+        task = {"id": "B-900", "check": "checks/core/tierb_B-002-service-check.py", "prompt": "x"}
+
+        def fake_run_task(t, root, label, timeout=420):
+            if label == "kandydat":
+                return self._leg_awarii()
+            return {"status": "pass", "summary": "ok", "wall_s": 1.0, "rc": 0,
+                    "stdout_tail": "", "stderr_tail": ""}
+
+        with mock.patch.object(tier_b, "EVAL", tempfile.mkdtemp(prefix="eval-test-")), \
+             mock.patch.object(tier_b, "run_task", side_effect=fake_run_task):
+            wynik = tier_b.paired("/inc", "/cand", [task], repeats=1)
+        para = wynik["pairs"][0]
+        self.assertEqual(para["infra_error"], ["B-900:kandydat"])
+        self.assertIn("infra_diag", para, "artefakt musi nieść przyczynę, nie tylko fakt")
+        self.assertIn("kandydat", para["infra_diag"])
+        self.assertNotIn("incumbent", para["infra_diag"], "diagnostyka tylko dla nogi, która padła")
+        self.assertNotIn(self._atrapy_sekretow()[0], json.dumps(para, ensure_ascii=False),
+                         "klucz nie może wyciec do artefaktu")
+        self.assertEqual(wynik["infra_errors"], ["B-900:kandydat"])
+        self.assertEqual(wynik["decisive_scenarios"], 0, "noga infra nie jest dowodem w żadną stronę")
 
 
 class SwiezyWariantTest(unittest.TestCase):

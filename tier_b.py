@@ -9,7 +9,7 @@ Uczciwe granice: to izolacja INTEGRALNOŚCI, nie poufności — rollout czyta pl
 (auth.json, .env, ~/.ssh) i ma dostęp do sieci na porcie 443 (API modelu).
 """
 import json, math, os, subprocess, sys, time, tempfile
-from evidence import snapshot, trace_since, last_message
+from evidence import snapshot, trace_since, last_message, redact
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
@@ -721,6 +721,32 @@ def pair_plan(tasks, repeats):
             for r in range(max(1, int(repeats))) for k, t in enumerate(tasks)]
 
 
+def ogon_awarii(leg, task_id, label):
+    """Zapisuje ZREDAGOWANY ślad nogi `infra_error` i zwraca wpis diagnostyczny do artefaktu.
+
+    Po co: noga, która nie wystartowała, niosła dotąd `rc` i czas (2026-11-09: `rc=1` po 60,7 s
+    bez śladu i artefaktów) — przyczyny nie dało się nazwać po fakcie, a awaria jest PRZEJŚCIOWA,
+    więc „uruchom jeszcze raz i patrz" nie odtwarza jej na życzenie.
+    Redakcja jest WARUNKIEM zapisu, nie ozdobą: piaskownica dostaje klucz modelu, a komunikat błędu
+    potrafi go powtórzyć (dokładne wartości z `model_env()` + wzorce z `evidence.WZORCE_SEKRETU`).
+    Ślad ląduje w `eval/evidence/` — poza każdym `--rw` przyznanym rolloutowi.
+    """
+    kawalki = [str(leg.get("stderr_tail") or "")]
+    if leg.get("stdout_tail"):
+        kawalki += ["--- stdout ---", str(leg["stdout_tail"])]
+    czysty = redact("\n".join(kawalki), extra_values=tuple(model_env().values()))
+    katalog = os.path.join(EVAL, "evidence")
+    os.makedirs(katalog, exist_ok=True)
+    sciezka = os.path.join(katalog, f"infra-{task_id}-{label}-{int(time.time())}.txt")
+    try:
+        with open(sciezka, "w", encoding="utf-8") as fh:
+            fh.write(f"rc={leg.get('rc')} wall_s={leg.get('wall_s')}\n{czysty}\n")
+    except OSError as e:                                  # brak zapisu nie może zjeść werdyktu
+        sciezka, czysty = "", f"(nie udało się zapisać śladu: {type(e).__name__}) {czysty}"
+    return {"rc": leg.get("rc"), "wall_s": leg.get("wall_s"),
+            "ogon": czysty[-600:], "plik": sciezka}
+
+
 def paired(incumbent_root, candidate_root, tasks, max_losses=2, budget_s=900, repeats=1):
     """Sekwencyjnie, para po parze, z early stoppingiem (oszczędność tokenów).
 
@@ -741,12 +767,18 @@ def paired(incumbent_root, candidate_root, tasks, max_losses=2, budget_s=900, re
             inc = run_task(task, incumbent_root, "incumbent")
         broken = [f"{task['id']}:{lbl}" for lbl, r in (("incumbent", inc), ("kandydat", cand))
                   if r.get("status") == "infra_error"]
+        # Diagnostyka awarii tylko dla nóg, KTÓRE padły: pełny artefakt ma nieść przyczynę
+        # (`infra_diag`), a nie sam fakt (`rc=1`). Ślad idzie też do pliku w `eval/evidence/`.
+        infra_diag = {lbl: ogon_awarii(r, task["id"], lbl)
+                      for lbl, r in (("incumbent", inc), ("kandydat", cand))
+                      if r.get("status") == "infra_error"}
         pairs.append({"task": task["id"], "kolejnosc": ("incumbent,pierwsza" if first_inc
                                                         else "kandydat,pierwsza"),
                       "incumbent": inc["status"], "kandydat": cand["status"],
                       "inc_summary": inc.get("summary"), "cand_summary": cand.get("summary"),
                       "inc_wall_s": inc["wall_s"], "cand_wall_s": cand["wall_s"],
-                      **({"infra_error": broken} if broken else {})})
+                      **({"infra_error": broken} if broken else {}),
+                      **({"infra_diag": infra_diag} if infra_diag else {})})
         if broken:
             # Noga, która nie wystartowała, nie jest ani wygraną, ani przegraną — inaczej zmiana
             # dostawcy dostawcy fałszuje arytmetykę par (i werdykt o kandydacie).

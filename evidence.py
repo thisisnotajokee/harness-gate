@@ -113,6 +113,41 @@ def last_message(db):
         con.close()
 
 
+WZORCE_SEKRETU = (
+    # Kolejność ma znaczenie: najpierw konstrukcje z nagłówkiem (`Bearer`, `key=`), potem „gołe"
+    # klucze. Wzorce są CELOWO zachłanne — lepiej zredagować kawałek treści błędu niż wypuścić klucz.
+    re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._\-]{8,}"),
+    re.compile(r"(?i)\b(api[_-]?key|x-api-key|authorization|access[_-]?token|refresh[_-]?token|"
+               r"secret|password|token|klucz)\b\s*[:=]\s*\S+"),
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"\b[A-Za-z0-9_\-]{40,}\b"),        # długie ciągi: klucze, podpisy, hashe sesji
+)
+ZREDAGOWANE = "[ZREDAGOWANE]"
+
+
+def redact(text, extra_values=()):
+    """Usuwa z tekstu materiał wyglądający na poświadczenie, ZACHOWUJĄC treść błędu.
+
+    Po co (2026-11-09): ogon `stderr` rolloutu jest jedynym śladem, który nazywa przyczynę awarii
+    drogi do modelu, a piaskownica dostaje KLUCZ MODELU — więc komunikat błędu potrafi go powtórzyć.
+    Bez redakcji zapis takiego ogona byłby wyciekiem; z redakcją jest dowodem (noga `infra_error`
+    niosła dotąd tylko `rc` i czas: `rc=1` po 60 s bez śladu i tyle było wiadomo).
+
+    `extra_values` to DOKŁADNE wartości, o których wiemy z otoczenia (`model_env()`) — mocniejsze niż
+    wzorce, bo nie polegają na kształcie klucza. Podstawiamy je pierwsze, od najdłuższej.
+    """
+    if not text:
+        return ""
+    wynik = str(text)
+    for wartosc in sorted({str(v) for v in extra_values if v and len(str(v)) >= 6}, key=len, reverse=True):
+        wynik = wynik.replace(wartosc, ZREDAGOWANE)
+    for wzorzec in WZORCE_SEKRETU:
+        # Gdy wzorzec ma grupę etykiety (`Bearer`, `api_key`), zachowujemy etykietę — bez wartości:
+        # komunikat błędu zostaje czytelny, a poświadczenie znika.
+        wynik = wzorzec.sub(lambda m: (m.group(1) + ": " + ZREDAGOWANE) if m.groups() else ZREDAGOWANE, wynik)
+    return wynik
+
+
 def deletion_attempts(calls):
     """Conservative lexical signal, NOT a complete semantic detector of arbitrary code."""
     found = []
