@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "lang": "en",
+  "anchor": { "mode": "in-place", "repo": "auto", "repo_path": "auto" },
+  "packs": [],
+  "tier_b": { "enabled": false, "model": "", "provider": "", "budget_s": 900, "repeats": 0,
+              "gateway_ports": [8646, 8647],
+              "proxy": { "url": "", "provider": "gate-proxy", "key_env": "GATE_PROXY_KEY" } },
+  "limits": { "memory_char": 2500, "user_char": 1500, "a004_max_warnings": 150, "a007_max_warnings": 0 },
+  "paths": { "kb": "kb" },
+  "cli": { "bin": "hermes", "required_flags": ["--in", "-z", "--yolo", "-m", "--provider"], "version_max": "" },
+  "parity": { "enabled": false, "repo": "auto", "files": ["SOUL.md", "memories/MEMORY.md", "memories/USER.md", "kb/_INDEX.md", "kb/core/*.md", "kb/incidents/*.md"], "clean_prefixes": ["skills/", "kb/", "scripts/", "memories/", "agent-hooks/", "SOUL.md"] },
+  "probes_forbidden": ["<hermes_home>", "~/.ssh"]
+}

@@ -1,0 +1,16 @@
+# Lokalna konfiguracja użytkownika — NIGDY nie commituj: trzyma ścieżki i profil.
+gate.config.json
+
+# Artefakty uruchomień: raporty, manifesty wariantów, dowody rolloutów.
+eval/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Logi i pliki tymczasowe
+*.log
+*.tmp

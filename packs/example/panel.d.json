@@ -1,0 +1,17 @@
+{
+  "paczka": "example",
+  "pack_version": "1.0.0",
+  "opis": "PRZYKŁADOWA paczka — wzorzec do skopiowania przy pisaniu własnej. Zawiera jedno zadanie Tier A (A-901) mierzące, czy konwencja hosta wskazana w `paths.kb` jest używana i niepusta. Paczka jest NIEAKTYWNA, dopóki nie wpiszesz \"example\" do `packs` w `gate.config.json`; wtedy jej zadania wejdą do panelu. Uwaga: dopisanie paczki do `packs` zmienia zakres egzaminu, więc wymaga przezbrojenia manifestu (`panel_lock.py --write`).",
+  "tasks": [
+    {
+      "id": "A-901-example-conventions",
+      "tier": "A",
+      "kategoria": "przykład",
+      "opis": "Katalog konwencji hosta (`paths.kb`) istnieje i zawiera co najmniej jeden plik .md. Brak katalogu = jawne `na` z powodem (konwencja nieużywana), pusty katalog = `fail` (brak materiału to nie czystość).",
+      "check": "packs/example/checks/check_example_conventions.py",
+      "zrodlo": "wzorzec: docs/PACKS.md",
+      "epizod": null,
+      "czas_s": 2
+    }
+  ]
+}
