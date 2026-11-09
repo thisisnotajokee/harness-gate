@@ -32,7 +32,9 @@ try:
     from eval_version import EVALUATOR_VERSION, GATE_PARAMS, digest, thresholds
 except Exception:  # pragma: no cover
     EVALUATOR_VERSION, digest, thresholds = "unknown", (lambda _t: "unknown"), (lambda: {})
-    GATE_PARAMS = {"tier_b_m_min": 12, "tier_b_delta": 0.2}   # fail-closed: nigdy niżej niż 12
+    # Fallback, gdy nie da się wczytać reguł: celowo OSTRZEJSZY niż próg normalny
+    # (12 scenariuszy zamiast 6) — fail-closed znaczy „w razie wątpliwości wyżej".
+    GATE_PARAMS = {"tier_b_m_min": 12, "tier_b_delta": 0.2}
 
 # --- Ustawienia pochodzą z `gate.config.json` (F2). Brak pliku = wartości domyślne
 # (pierwsze uruchomienie zielone bez konfiguracji), plik ZEPSUTY = REJECT — literówka
@@ -112,7 +114,11 @@ def resolved_check(rel, home=None):
 def tier_b_tasks():
     """Zadania Tier B (rollout) czytane z panelu — wykonuje je tier_b.py."""
     try:
-        return [t for t in load_panel()["tasks"] if t.get("tier") == "B"]
+        # Jedno źródło listy: właścicielem jest `tier_b.load_tier_b_tasks` (pack-aware).
+        # Wcześniej ta funkcja i `tier_b.load_tier_b_tasks` odpowiadały RÓŻNIE (7 vs 5), a runner
+        # używał tej uboższej — czyli zadania Tier B z paczek nigdy nie biegły.
+        import tier_b as _tb
+        return _tb.load_tier_b_tasks()
     except Exception:
         return []
 
@@ -204,6 +210,36 @@ def eval_version_line():
     return {"evaluator_version": EVALUATOR_VERSION, "thresholds_hash": digest(th)}
 
 
+def check_argv(task, root):
+    """Pełne argv checka zadania — JEDNO miejsce dla Tier A i Tier B, testowalne bez uruchamiania.
+
+    Rozgałęzienie jest po TIERZE, nie po „nie-A-005". Do 2026-11-09 gałąź domyślna obsługiwała
+    razem Tier A i Tier B, więc:
+      * każdy check Tier B dostawał argv bez `--scratch` (a to argument `required=True` w każdym
+        z nich) — polecenie nie do uruchomienia, niewidoczne, bo ta ścieżka nie biegła w produkcji;
+      * próba naprawy przez wspólny `tier_b.check_argv` odebrała `--home` checkom Tier A i dała im
+        `--scratch`, którego nie znają → `rc=2` i CAŁY panel czerwony (złapane pełnym zestawem,
+        6 testów, 2026-11-09).
+    Strażnik `tests/test_tierB_falsification.py::ArgvContractTest` porównuje argv z tego miejsca
+    z argumentami ZADEKLAROWANYMI przez każdy check (w obie strony: brak wymaganego = nadmiarowy).
+    """
+    check = resolved_check(task["check"])
+    if task.get("id") == "A-005-panel-integrity":
+        # A-005 mierzy DRUGIE drzewo (kotwicę), więc potrzebuje dwóch korzeni, nie jednego.
+        własna = os.path.join(root, "scripts", "harness_eval")
+        if os.path.realpath(root) == os.path.realpath(HERMES_HOME):
+            h, rp = HERMES_HOME, GIT_REPO          # bramka mierzy samą siebie (kotwica z konfiguracji)
+        elif os.path.isdir(własna):
+            h, rp = root, root                     # wariant KODU: jego własny manifest i kotwica
+        else:
+            h, rp = HERMES_HOME, GIT_REPO          # wariant TREŚCI: mierzymy bramkę, która pracuje
+        return [sys.executable, check, "--home", h, "--repo", rp, "--repo-path", ANCHOR_REPO_PATH]
+    if task.get("tier") == "B":
+        import tier_b as _tb                        # import lokalny (tier_b → harness_eval też lokalnie)
+        return _tb.check_argv(task, root, root)
+    return [sys.executable, check, "--variant", root, "--home", root]
+
+
 def run_check(task, root, timeout=180):
     check = resolved_check(task["check"])
     if check is None:
@@ -212,26 +248,14 @@ def run_check(task, root, timeout=180):
     if not os.path.isfile(check):
         return {"id": task["id"], "status": "skip", "summary": f"brak checka {task['check']}",
                 "details": [], "rc": 2}
+    # Zadanie Tier B mierzące WYKONANIE potrzebuje dowodu (`--evidence`), którego panel nie tworzy:
+    # odmawiamy GŁOŚNO, zamiast wysyłać checkowi polecenie nie do uruchomienia.
+    if task.get("tier") == "B" and (task.get("evidence_probe") or task.get("trace_probe")):
+        return {"id": task["id"], "status": "fail", "rc": 2, "details": [],
+                "summary": ("panel nie tworzy dowodu dla zadania mierzącego wykonanie — "
+                            "uruchom je przez `--tier-b`, nie przez panel")}
     try:
-        if task.get("id") == "A-005-panel-integrity":
-            # F3: gdy mierzone drzewo MA własną bramkę (wariant KODU), mierzymy JEGO manifest —
-            # kandydat nie może przejść z usuniętym `panel.lock`. Gdy jej NIE ma (wariant TREŚCI
-            # z `--make-variant`: kopiuje `config.yaml`, `SOUL.md`, `skills/`, `memories/`, `kb/`),
-            # nie ma czego mierzyć w środku — mierzymy bramkę, która realnie wykonuje pracę.
-            # Bez tego rozróżnienia A-005 zwracał `LOCK_MISSING` na ścieżce, która nie istnieje
-            # z założenia, `compare()` zgłaszał blocker i **Tier B nie startował wcale**
-            # (znalezione pre-flightem 2026-11-09, przed wydaniem tokenów).
-            własna = os.path.join(root, "scripts", "harness_eval")
-            if os.path.realpath(root) == os.path.realpath(HERMES_HOME):
-                h, rp = HERMES_HOME, GIT_REPO          # bramka mierzy samą siebie (kotwica z konfiguracji)
-            elif os.path.isdir(własna) and os.path.isfile(os.path.join(własna, "panel.lock")):
-                h, rp = root, root                     # wariant KODU: jego własny manifest i kotwica
-            else:
-                h, rp = HERMES_HOME, GIT_REPO          # wariant TREŚCI: mierzymy bramkę, która pracuje
-            cmd = [sys.executable, check, "--home", h, "--repo", rp,
-                   "--repo-path", ANCHOR_REPO_PATH]
-        else:
-            cmd = [sys.executable, check, "--variant", root, "--home", root]
+        cmd = check_argv(task, root)
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"id": task["id"], "status": "fail", "summary": f"timeout {timeout}s",
@@ -512,6 +536,59 @@ def gate_integrity_preflight(home=None, repo=None):
     return {"status": "pass", "summary": report.get("summary", "A-005 PASS")}
 
 
+def tier_b_verdict(tier_b_result, params):
+    """Werdykt Tier B liczony na SCENARIUSZACH. Zwraca `(werdykt, uzasadnienie)`.
+
+    Kolejność klas jak w Tier A: **przegrana PRZED awarią infrastruktury**. Uzasadnienie jest
+    w kodzie: `paired()` wyrzuca zadanie z nogą `infra_error` w całości, więc przegrana i awaria
+    dotyczą RÓŻNYCH zadań — awaria nie unieważnia realnego dowodu regresji.
+    """
+    import tier_b as _tb                                  # import lokalny (jak w tier_b → sign_test_p)
+    pary = tier_b_result.get("pairs") or []
+    # Fail-closed jak w `gate_config`: wejście NIESPÓJNE (są policzone wygrane/przegrane, ale brak par,
+    # z których one powstają) nie może wyglądać jak „brak danych" — inaczej cicha zmiana kształtu
+    # wyniku zamienia się w `TIER_B_REQUIRED` bez śladu przyczyny.
+    if not pary and (tier_b_result.get("wins") or tier_b_result.get("losses")):
+        return "TIER_B_REQUIRED", (
+            "niespójny wynik Tier B: są `wins`/`losses`, ale brak `pairs` — dowód liczy się na "
+            "scenariuszach, a te powstają z par; nie zgaduję wyniku z samych liczników")
+    rozstrzygnięte, chwiejne, _remisy = _tb.scenario_outcomes(pary)
+    przegrane = [t for wynik, t in rozstrzygnięte if wynik == "przegrana"]
+    wygrane = [t for wynik, t in rozstrzygnięte if wynik == "wygrana"]
+    if przegrane:
+        # Ostrzeżenie zostaje z poprzedniej reguły: niepełny przebieg nie może uchodzić za pełny
+        # pomiar, ale przegrana JEST dowodem regresji i nie wolno jej schować pod awarią kabli.
+        uwaga = ""
+        if tier_b_result.get("infra_errors"):
+            uwaga = (f" UWAGA: {len(tier_b_result['infra_errors'])} noga/nogi nie wystartowały — "
+                     f"przebieg niepełny, choć przegrana pozostaje dowodem regresji.")
+        return "REJECT", f"Tier B: przegrane na {len(przegrane)} zadaniach: {przegrane}.{uwaga}"
+    if tier_b_result.get("infra_errors"):
+        broken = tier_b_result["infra_errors"]
+        return "INFRA_ERROR", (
+            f"{len(broken)} noga/nogi rolloutu NIE wystartowały ({broken[:3]}) — awaria drogi do "
+            f"modelu (klucz/saldo/sieć), nie wynik kandydata; sprawdź provider_health i powtórz serię")
+    if chwiejne:
+        return "REJECT", (
+            f"chwiejne zadania: {chwiejne} — powtórzenia tego samego zadania dają różne wyniki, więc "
+            f"egzamin nie jest dowodem (defekt EGZAMINU, nie kandydata)")
+    m_min = int(params.get("tier_b_m_min", 12))
+    delta = float(params.get("tier_b_delta", 0.2))
+    n, w = len(rozstrzygnięte), len(wygrane)
+    if n < m_min:
+        return "TIER_B_REQUIRED", (
+            f"za mało rozstrzygniętych SCENARIUSZY: {n}/{m_min} (powtórzenia tego samego zadania "
+            f"nie są niezależnym dowodem) — dobij zadania, nie powtórzenia")
+    dolna = _tb.cp_lower(w, n, conf=1 - delta)
+    if w == n and dolna > 0.5:
+        return "ACCEPT", (
+            f"{w}/{n} scenariuszy wygranych, dolna granica {1 - delta:.0%} = {dolna:.3f} > 0.5 "
+            f"(test znaków p={sign_test_p(w, n - w):.3f}, m_min={m_min})")
+    return "REJECT", (
+        f"dowód niewystarczający: {w}/{n} wygranych, dolna granica {1 - delta:.0%} = {dolna:.3f} "
+        f"nie przekracza 0.5")
+
+
 def sign_test_p(wins, losses):
     """Jednostronny dokładny test znaków na parach rozstrzygniętych (remisy pomijane)."""
     n = wins + losses
@@ -529,7 +606,14 @@ def compare(incumbent, candidate):
     wins, losses, ties = [], [], []
     for r in candidate:
         i = inc.get(r["id"])
-        if i is None or r["status"] == "skip" or i["status"] == "skip":
+        if i is None:
+            # Wiersz istnieje TYLKO u kandydata. Do 2026-11-09 każdy taki wiersz był `tie`,
+            # więc `A-005-integrity-post` (dryf wykryty PO pomiarze) nie blokował niczego —
+            # wykryte oszustwo lądowało w remisach i kandydat mógł dostać ACCEPT
+            # (recenzja zewnętrzna §3.1). `fail` po jednej stronie to DOWÓD, nie brak porównania.
+            (losses if r["status"] == "fail" else ties).append(r["id"])
+            continue
+        if r["status"] == "skip" or i["status"] == "skip":
             ties.append(r["id"])
             continue
         if i["status"] == "pass" and r["status"] == "fail":
@@ -544,7 +628,10 @@ def compare(incumbent, candidate):
                 for side, rows in (("incumbent", incumbent), ("kandydat", candidate))
                 for r in rows
                 if r.get("status") == "skip"
-                or (r.get("id") == "A-005-panel-integrity" and r.get("status") != "pass")
+                # OBA wiersze integralności blokują: `-integrity-post` to dryf wykryty podczas
+                # pomiaru (TOCTOU), czyli dokładnie ta manipulacja, przed którą broni bramka.
+                or (r.get("id") in ("A-005-panel-integrity", "A-005-integrity-post")
+                    and r.get("status") != "pass")
             ] + _applicability_changes(inc, candidate),
             "p_value": sign_test_p(len(wins), len(losses))}
 
@@ -582,34 +669,14 @@ def verdict(comp, klasa, tier_b=None):
         # brak mocy to „dobij pary". Odwrotna kolejność zamieniłaby regresję w „za mało danych".
         # Awaria drogi do modelu to NIE werdykt o kandydacie (dodane 2026-10-27 po incydencie 402):
         # gdy dostawca był martwy, nieudane nogi dawały „przegrane" i REJECT, czyli zmiana dostawcy
-        # odrzucała dobre zmiany. Guard stoi PRZED regułą przegranych, bo przy niepewnym pomiarze
-        # żadna z par nie jest dowodem — fail-closed, bez rozstrzygania po cichu.
-        if tier_b.get("infra_errors"):
-            broken = tier_b["infra_errors"]
-            return "INFRA_ERROR", (
-                f"{len(broken)} noga/nogi rolloutu NIE wystartowały ({broken[:3]}) — awaria drogi do "
-                f"modelu (klucz/saldo/sieć), nie wynik kandydata; sprawdź provider_health i powtórz serię")
-        if tier_b["losses"]:
-            return "REJECT", f"Tier B: przegrane {tier_b['losses']}"
-        # .6: moc kupujemy tokenami, nie luzowaniem progu. Werdykt dla klas 1C/2 wymaga
-        # m >= m_min ROZSTRZYGNIĘTYCH par (wins+losses); przy remisach para nie liczy się jako
-        # dowód, więc „12 par" oznacza 12 rozstrzygnięć, nie 12 uruchomień.
-        m_min = int(GATE_PARAMS.get("tier_b_m_min", 12))
-        resolved = len(tier_b["wins"]) + len(tier_b["losses"])
-        if resolved < m_min:
-            return "TIER_B_REQUIRED", (
-                f"za mało rozstrzygniętych par: {resolved}/{m_min} (brak mocy statystycznej, "
-                f"δ={GATE_PARAMS.get('tier_b_delta')}) — dobij pary, nie obniżaj progu")
-        w, l = len(tier_b["wins"]), len(tier_b["losses"])
-        # F7 — świadome odstępstwo od SPEC §2.4/§6.2: kod jest OSTRZEJSZY niż SPEC (SPEC dopuszczał
-        # (w≥4, l≤1) jako tolerancję szumu). Przegrana = realna regresja na zadaniu, które mamy,
-        # więc nie przepuszczamy jej wyjątkiem. Odporność na szum kupujemy LICZBĄ PAR (m≥12) i tabelą
-        # Hoeffdinga z SPEC, a nie luzowaniem progu — parametry m/δ wchodzą do wersji J.
-        # Wyzwalacz powrotu do (4,1): dwa REJECTy z rzędu przy nogach bez awarii infrastruktury
-        # (wtedy wracamy do tego wariantu jako osobna decyzja J_MUTATION, nie po cichu).
-        if l == 0 and w >= m_min:
-            return "ACCEPT", f"test znaków: wygrane={w} przegrane={l} p={tier_b['p_value']:.3f} (m_min={m_min})"
-        return "REJECT", f"test znaków nieosiągnięty: wygrane={w} przegrane={l} p={tier_b['p_value']:.3f}"
+        # odrzucała dobre zmiany.
+        # KOLEJNOŚĆ (zmieniona 2026-11-09, recenzja zewnętrzna §1.4): NAJPIERW przegrana, POTEM
+        # awaria. Wcześniej `INFRA_ERROR` miał priorytet, więc jedna nieudana noga unieważniała
+        # realne `REJECT` — czyli wystarczyło, by jakakolwiek noga nie wystartowała, i udowodniona
+        # regresja znikała. Odwrotna kolejność też była zła, ale w drugą stronę (awaria dostawcy
+        # odrzucała dobre zmiany): dlatego przegrana wygrywa, a obecność awarii jest W TRESCI
+        # wyroku, żeby nikt nie wziął zaniżonego wyniku za pełny pomiar.
+        return tier_b_verdict(tier_b, GATE_PARAMS)
     if comp["wins"]:
         return "ACCEPT", f"bez regresji, wygrane na {len(comp['wins'])}: {comp['wins']}"
     return "REJECT", "brak wygranych — brak dowodu poprawy (remis/identyczny wynik)"
@@ -1010,6 +1077,17 @@ def main():
         # z niestandardowym `HERMES_HOME` musi wiedzieć, czego dotyczy werdykt (i czemu np.
         # „brak skills/" jest prawdą o TYM drzewie). Na stderr, żeby nie zmieniać kontraktu
         # wyjścia panelu (5–6 linii na stdout).
+        # Nadpisania progów przez środowisko omijają manifest (`panel.lock` obejmuje
+        # `gate.config.json`, nie zmienne procesu), więc reguły mogą być luźniejsze, niż zapisane.
+        # Nie blokujemy tego (to nasza furtka diagnostyczna), ale MÓWIMY — inaczej „zmiana reguł
+        # bez przezbrojenia locka" przechodzi po cichu (recenzja zewnętrzna 2026-11-09, §5.1).
+        _nadpisane = [k for k in ("A002_MEMORY_CHAR_LIMIT", "A002_USER_CHAR_LIMIT",
+                                  "A004_MAX_WARNINGS", "HARNESS_GATE_CONFIG",
+                                  "EVAL_FORBIDDEN_PROBES", "EVAL_ALLOW_NET_PORTS")
+                      if os.environ.get(k)]
+        if _nadpisane and not args.verbose:
+            print(f"i: aktywne nadpisania środowiskowe poza manifestem: {', '.join(_nadpisane)}",
+                  file=sys.stderr)
         if guard.get("note"):
             print(f"i: mierzę drzewo {HERMES_HOME} (z `HERMES_HOME`), a nie {ENV_HERMES_HOME} "
                   f"(`$HOME/.hermes`) — to nie błąd, tylko inny dom", file=sys.stderr)
@@ -1128,6 +1206,17 @@ def main():
                        f"({', '.join(sorted(dostepne)) or 'brak'}) — {jak}."),
                  **paths_line()}, ensure_ascii=False, indent=2))
             return 1
+        # Pośrednik: martwy `hermes proxy` wygląda jak awaria dostawcy, a kosztuje cały budżet
+        # (2026-11-09: ~25 min rolloutów na ponowieniach). Odmawiamy w sekundę.
+        _proxy_ok, _proxy_why = tier_b.proxy_health()
+        if not _proxy_ok:
+            print(json.dumps(
+                {"werdykt": "REJECT", "kod": "TIER_B_PROXY_DOWN",
+                 "uzasadnienie": (f"pośrednik z `tier_b.proxy.url` nie odpowiada: {_proxy_why}. "
+                                  f"Uruchom `hermes proxy start --provider <nous|xai>` "
+                                  f"(i sprawdź `hermes proxy status`) albo wyłącz `tier_b.proxy`."),
+                 **paths_line()}, ensure_ascii=False, indent=2))
+            return 1
         inc_root = os.path.join(VARIANTS, args.incumbent_variant)
         cand_root = os.path.join(VARIANTS, args.variant)
         for r in (inc_root, cand_root):
@@ -1142,10 +1231,13 @@ def main():
             print("BŁĄD: brak zadań Tier B do uruchomienia", file=sys.stderr)
             return 2
         m_min = int(GATE_PARAMS.get("tier_b_m_min", 12))
-        repeats = args.tier_b_repeats or -(-m_min // max(1, len(tasks)))   # ceil(m_min / liczba zadań)
+        # Powtórzenia służą STABILNOŚCI (wykryciu chwiejnego zadania), nie mocy — moc kupujemy
+        # liczbą RÓŻNYCH zadań, bo powtórzenia dzielą stan wariantu. Stara formuła
+        # ceil(m_min/liczba zadań) kupowała pary, których reguła już nie liczy.
+        repeats = args.tier_b_repeats or 2
         print(f"incumbent: {inc_root}\nkandydat:  {cand_root}\nzadania: "
               f"{[t['id'] for t in tasks]} × {repeats} powtórzeń = {len(tasks) * repeats} par "
-              f"(rozstrzygniętych wymagane m ≥ {m_min}; δ={GATE_PARAMS.get('tier_b_delta')})\n"
+              f"(rozstrzygniętych wymagane m ≥ {m_min} SCENARIUSZY; δ={GATE_PARAMS.get('tier_b_delta')})\n"
               f"(rollout = realne wywołania API)\n")
         # F2: SPEC §2.4 wymaga „najpierw Tier A (przegrane = 0), potem Tier B". Panel statyczny
         # uruchamiamy TUTAJ, przed płatnymi rolloutami — dzięki temu regresji statycznej nie da się

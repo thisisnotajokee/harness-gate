@@ -26,14 +26,17 @@ except Exception:                                    # pragma: no cover
     def extract_names(a):
         return set()
 
-HOME = os.path.expanduser("~/.hermes")
+HOME = os.path.realpath(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"))
 LEDGER = os.path.join(HOME, "eval", "ledger.jsonl")
 DB = os.path.join(HOME, "state.db")
 RUNS = os.path.join(HOME, "eval", "runs")
 OUT = os.path.join(HOME, "eval", "observation.json")
 
 REQUIRED = ("ts", "artifact", "klasa", "werdykt", "status", "evaluator_version")
-ALLOWED_STATUS = {"PROVISIONAL", "FINAL_ACCEPT", "REJECT", "TIER_B_REQUIRED",
+# `INFRA_ERROR` jest legalny: bramka ZAPISUJE przebiegi, w których rollout nie wystartował
+# (awaria drogi do modelu). Bez tego każdy taki przebieg zaśmiecał audyt jako „nieznany status"
+# (recenzja zewnętrzna 2026-11-09, §1.4).
+ALLOWED_STATUS = {"PROVISIONAL", "FINAL_ACCEPT", "REJECT", "TIER_B_REQUIRED", "INFRA_ERROR",
                   "J_MUTATION", "AMENDMENT"}
 DEBT_LIMIT = 2
 

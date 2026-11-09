@@ -226,11 +226,13 @@ def main():
         die(f"landlock_restrict_self errno={ctypes.get_errno()}")
 
     if not args.no_verify:
-        try:
-            os.makedirs(os.path.join(os.path.expanduser("~"), ".hermes"), exist_ok=True)
-        except Exception:
-            pass
-        probes = args.forbidden_probe or [os.path.join(os.path.expanduser("~"), ".hermes")]
+        # NIE tworzymy niczego w cudzym domu: do 2026-11-09 ta linia zakładała `~/.hermes`
+        # w prawdziwym `$HOME` przy KAŻDYM uruchomieniu piaskownicy, także z niestandardowym
+        # `HERMES_HOME` — efekt uboczny poza drzewem, którego dotyczy proces (recenzja §6).
+        # Sonda domyślna liczona z `HERMES_HOME`, a gdy katalog nie istnieje, weryfikujemy
+        # zapis do jego RODZICA (uprawnienia sprawdzamy i tak na ścieżce dziecka).
+        dom = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+        probes = args.forbidden_probe or [dom]
         verify(rw[0] if rw else None,
                [os.path.join(p, ".__sandbox_forbidden_probe") for p in probes])
 

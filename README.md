@@ -97,8 +97,10 @@ leży w `packs/example/` (jedna kontrola, trzy statusy, czytanie konfiguracji, k
 ## Granica zaufania
 
 - Bramka **nie uruchamia** Tier B bez jawnego włączenia; nie modyfikuje mierzonego drzewa.
-- Izolacja Tier B chroni **integralność** Twojego drzewa przed rollem, nie poufność: rollout
-  czyta pliki i ma dostęp do sieci. Sekrety (`.env`, klucze) **nie** są kopiowane do piaskownicy.
+- Izolacja Tier B chroni **integralność** Twojego drzewa przed rollem, nie poufność. Piaskownica
+  blokuje ZAPISY, nie odczyty: rollout czyta pliki i ma dostęp do sieci. Sekrety (`.env`, klucze)
+  **nie** są kopiowane do piaskownicy, ale to **nie jest** izolacja poświadczeń — rollout może je
+  odczytać z drzewa (do niego wchodzi tylko klucz modelu, potrzebny, by w ogóle zadziałał).
 - `TAMPERING_DETECTED` / `LOCK_DRIFT` znaczą „rozjazd treści albo brak manifestu w HEAD" —
   nie samo słowo „atak". Bez kotwicy zobaczysz instrukcję naprawy, nie oskarżenie.
 

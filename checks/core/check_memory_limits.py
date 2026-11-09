@@ -93,7 +93,10 @@ def limits(config_path):
         txt = open(config_path, "r", encoding="utf-8", errors="replace").read()
     except OSError:
         return lim, False, []
-    bad, duplicates = [], []
+    # `seen` = klucze już widziane. Do 2026-11-09 warunek „duplikatu" był sprzężony z wartością
+    # (łapał tylko powtórzenie z nie-domyślną wartością), a lista `duplicates` **nie była nigdzie
+    # zwracana** — czyli obietnica z docstringa nie miała egzekucji (recenzja zewnętrzna §5.2/§7.5).
+    bad, duplicates, seen = [], [], set()
     for line in strip_block_scalars(txt).splitlines():
         m = re.match(r"^\s*(memory_char_limit|user_char_limit):\s*([^#\s]+)", line)
         if not m:
@@ -105,9 +108,13 @@ def limits(config_path):
         except ValueError:
             bad.append(f"{m.group(1)}: {raw!r}")
             continue
-        if key in duplicates or (key in lim and lim[key] != DEFAULTS[key]):
+        if key in seen:
             duplicates.append(key)
+        seen.add(key)
         lim[key] = value
+    # Duplikat klucza to konfiguracja NIEJEDNOZNACZNA („ostatni wygrywa" to nie reguła, to skutek)
+    # — idzie tym samym kanałem co wartości nieparsowalne, więc kończy się `fail`.
+    bad = bad + [f"{k}: klucz zduplikowany w config.yaml (niejednoznaczny limit)" for k in duplicates]
     return lim, True, bad
 
 
@@ -154,7 +161,7 @@ def main():
             elif pct >= 90:
                 details.append(f"{fn}: {pct:.0f}% budżetu — blisko limitu")
     if not seen and not unreadable:
-        emit("A-002-memory-limits", "skip", "brak plików pamięci do sprawdzenia")
+        emit("A-002-memory-limits", "skip", "brak plików pamięci do sprawdzenia — mierzę pliki wg konwencji MEMORY/*MEMORY* oraz USER* w memories/; pliki o innych nazwach NIE są objęte tymi limitami (zmień nazwę albo rozszerz check)")
     if bad:
         emit("A-002-memory-limits", "fail",
              "limit nieparsowalny: " + ", ".join(bad), details + seen)

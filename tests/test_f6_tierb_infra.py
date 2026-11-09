@@ -13,6 +13,7 @@ MASKOWAŁY SIĘ jako wynik kandydata. Każdy test pinuje jeden konkretny, cichy 
   wpisany w konfigurację wariantu; własny blok `providers:` = odmowa, nie ciche doklejenie.
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -81,6 +82,49 @@ class CredentialDiscoveryTest(unittest.TestCase):
         self.assertEqual(tier_b._port_from_url("http://127.0.0.1:8645/v1"), "8645")
         self.assertEqual(tier_b._port_from_url("https://proxy.example/v1"), "443")
         self.assertEqual(tier_b._port_from_url(""), "")
+
+
+class SwiezyWariantTest(unittest.TestCase):
+    """Świeży wariant musi być CZYTELNY dla sond Tier B (znalezione płatnym przebiegiem 2026-11-09).
+
+    `make_variant` zakłada SQLite z poprawnym nagłówkiem, ale BEZ schematu — Hermes tworzy tabele
+    `messages` dopiero przy pierwszym zapisie rolloutu, a punkt odcięcia śladu liczymy PRZED rollem.
+    Sondy czytały tabelę bez tolerancji, więc **każde** zadanie z `trace_probe`/`evidence_probe`
+    wywracało cały przebieg (`no such table: messages`) — po decyzji o wariantach, zaraz przed
+    wydaniem tokenów. Ten test pilnuje, że sonda nie wybucha i że uszkodzona baza nadal jest błędem.
+    """
+
+    def _swieza_baza(self, root):
+        import sqlite3
+        db = os.path.join(root, "state.db")
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE IF NOT EXISTS _gate_init (x INTEGER)")
+        con.execute("DROP TABLE _gate_init")
+        con.commit()
+        con.close()
+        return db
+
+    def test_sondy_nie_wybuchaja_bez_schematu(self):
+        import evidence
+        root = tempfile.mkdtemp(prefix="swiezy-wariant-")
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        db = self._swieza_baza(root)
+        self.assertEqual(evidence.last_message(db), 0, "brak tabeli = brak historii, nie wyjątek")
+        self.assertEqual(evidence.trace_since(db, 0), [], "brak tabeli = brak wierszy")
+        task = {"id": "B-001-cost-report", "trace_probe": True}
+        self.assertEqual(tier_b.probe_first_id(task, db), 0,
+                         "punkt odcięcia na świeżym wariancie to 0, nie wyjątek")
+
+    def test_uszkodzona_baza_nadal_jest_bledem(self):
+        """Tolerancja dotyczy WYŁĄCZNIE `no such table` — inaczej cicha baza udawałaby pustą."""
+        import evidence
+        root = tempfile.mkdtemp(prefix="zepsuta-baza-")
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        db = os.path.join(root, "state.db")
+        with open(db, "wb") as fh:
+            fh.write(b"to nie jest baza sqlite" * 40)
+        with self.assertRaises(Exception):
+            evidence.last_message(db)
 
 
 class GatewayPortTest(unittest.TestCase):

@@ -55,7 +55,12 @@ def trace_since(db, first_id, with_results=False):
     """
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
     try:
-        rows = con.execute("SELECT id,tool_calls FROM messages WHERE id > ? AND tool_calls IS NOT NULL ORDER BY id", (first_id,)).fetchall()
+        try:
+            rows = con.execute("SELECT id,tool_calls FROM messages WHERE id > ? AND tool_calls IS NOT NULL ORDER BY id", (first_id,)).fetchall()
+        except sqlite3.OperationalError as e:
+            if _brak_tabeli(e):
+                return []                    # brak tabeli = brak wierszy (patrz `_brak_tabeli`)
+            raise
         results = {}
         if with_results:
             for uid, content in con.execute(
@@ -82,12 +87,28 @@ def trace_since(db, first_id, with_results=False):
         con.close()
 
 
+def _brak_tabeli(e):
+    """`no such table` to BRAK HISTORII, nie uszkodzenie bazy.
+
+    Świeży wariant ma poprawny nagłówek SQLite, ale bez schematu — Hermes zakłada tabele dopiero
+    przy pierwszym zapisie rolloutu, a punkt odcięcia liczymy PRZED rollem. Bez tego rozróżnienia
+    cały przebieg Tier B padał na `no such table: messages` (2026-11-09, zadania z sondami).
+    Uszkodzona baza (nieczytelna, `DatabaseError`) nadal leci wyjątkiem — właśnie dlatego łapiemy
+    wyłącznie ten jeden komunikat.
+    """
+    return "no such table" in str(e).lower()
+
+
 def last_message(db):
     if not Path(db).is_file():
         return 0
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
     try:
         return con.execute('SELECT COALESCE(MAX(id),0) FROM messages').fetchone()[0]
+    except sqlite3.OperationalError as e:
+        if _brak_tabeli(e):
+            return 0
+        raise
     finally:
         con.close()
 

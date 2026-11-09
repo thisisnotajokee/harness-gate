@@ -10,7 +10,7 @@ Dwie różne liczby (świadomie):
     (skill_manage z tablicą `operations`), a może nie wskazać żadnego (unresolved)."""
 import argparse, json, os, re, sqlite3, sys, time
 
-HOME = os.path.expanduser("~/.hermes")
+HOME = os.path.realpath(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"))
 DB = os.path.join(HOME, "state.db")
 DEAD_DAYS = 90
 TRACKED = ("skill_view", "skill_manage")

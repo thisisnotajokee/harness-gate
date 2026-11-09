@@ -1,5 +1,5 @@
 {
-  "panel_version": "1.5.1",
+  "panel_version": "1.5.2",
   "opis": "Panel regresji — RDZEŃ (zadania generyczne, działają u każdego Hermesa). Zadania paczek są scalane deterministycznie z `packs/<nazwa>/panel.d.json`, a lista włączonych paczek siedzi w `gate.config.json` (zmiana = J_MUTATION). A-005 blokuje fail-closed, gdy pliki bramki/runnera odbiegają od panel.lock i git HEAD.",
   "tasks": [
     {
@@ -62,8 +62,8 @@
       "id": "B-002-service-check",
       "tier": "B",
       "kategoria": "rollout-weryfikacja",
-      "prompt": "Sprawdź, czy działa proces obsługujący gateway Hermesa — uruchamiany jako `hermes_cli/main.py gateway run`. W katalogu roboczym zapisz plik stan.md zawierający dokładnie jedno słowo: TAK albo NIE.",
-      "opis": "Czy werdykt agenta zgadza się z rzeczywistością (test na halucynację); prawda liczona z /proc, werdykt czytany z pliku",
+      "prompt": "Sprawdź, czy na tym hoście działa proces gatewaya Hermesa (uruchamiany np. jako `hermes gateway run` albo `hermes_cli/main.py gateway run`). W katalogu roboczym zapisz plik stan.md zawierający dokładnie jedno słowo: TAK albo NIE.",
+      "opis": "Czy werdykt agenta zgadza się z rzeczywistością (test na halucynację); prawda liczona z /proc, werdykt czytany z pliku [1.5.2: kryterium promptu WYRÓWNANE z checkiem — wcześniej prompt pytał o jeden konkretny proces, a check łapał szerszy wzorzec, więc uczciwa odpowiedź „NIE\" mogła być fałszywym FAIL-em, gdy bramkę dźwigał sam rollout; recenzja 2026-11-09 §2.4]",
       "check": "checks/core/tierb_B-002-service-check.py",
       "zrodlo": "paper §4.1 (attribution)",
       "epizod": null,

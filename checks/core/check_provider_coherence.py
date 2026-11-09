@@ -59,7 +59,10 @@ def gate_max_warnings():
 
 def _section(txt, name):
     """Blok top-level `name:` (linie z wcięciem) — bez YAML-a, żeby nie zależeć od bibliotek."""
-    m = re.search(rf"(?m)^{re.escape(name)}:\s*\n((?:[ \t]+.*\n|\s*\n)*)", txt)
+    # `[ \t]*#.*\n` w alternatywie: komentarz w kolumnie 0 wewnątrz bloku YAML nie może urywać
+    # parsowania — inaczej pola poniżej komentarza są niewidoczne dla A-007, czyli wpisanie
+    # komentarza „wyłączało" kontrolę spójności dostawcy (recenzja zewnętrzna 2026-11-09, §5.4).
+    m = re.search(rf"(?m)^{re.escape(name)}:\s*\n((?:[ \t]+.*\n|[ \t]*#.*\n|\s*\n)*)", txt)
     return m.group(1) if m else ""
 
 

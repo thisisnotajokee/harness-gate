@@ -8,7 +8,11 @@ import os
 import sys
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-LOCKED_SUFFIXES = {".py", ".sh", ".json"}
+# Rozszerzenia objęte manifestem. PUSTE rozszerzenie = plik bez sufiksu (skrypt wykonywalny,
+# `Makefile`) — do 2026-11-09 takie pliki były dla A-005 NIEWIDOCZNE, więc w trybie manifestowym
+# dało się dołożyć kod poza regułami. `.pth`/`.so` dochodzą, bo leżą na ścieżce importu Pythona,
+# czyli wykonują się przy starcie interpretera (recenzja zewnętrzna 2026-11-09, §2.5).
+LOCKED_SUFFIXES = {".py", ".sh", ".json", ".pth", ".so", ".yaml", ".yml", ".toml", ""}
 REQUIRED_FILES = {
     "panel.json",
     "harness_eval.py",

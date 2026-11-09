@@ -8,7 +8,7 @@ kernel, a nie przez dobrą wolę agenta.
 Uczciwe granice: to izolacja INTEGRALNOŚCI, nie poufności — rollout czyta pliki
 (auth.json, .env, ~/.ssh) i ma dostęp do sieci na porcie 443 (API modelu).
 """
-import json, os, subprocess, sys, time, tempfile
+import json, math, os, subprocess, sys, time, tempfile
 from evidence import snapshot, trace_since, last_message
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -41,7 +41,9 @@ def _main_model():
     except OSError:
         return "", ""
     import re as _re
-    block = _re.search(r"(?m)^model:\s*\n((?:[ \t]+.*\n|\s*\n)*)", txt)
+    # `[ \t]*#.*\n` w alternatywie: komentarz w kolumnie 0 wewnątrz bloku `model:` nie może
+    # urywać parsowania — inaczej pola poniżej są niewidoczne dla A-007 (recenzja 2026-11-09, §5.4).
+    block = _re.search(r"(?m)^model:\s*\n((?:[ \t]+.*\n|[ \t]*#.*\n|\s*\n)*)", txt)
     block = block.group(1) if block else ""
     one = lambda k: (_re.search(rf"(?m)^[ \t]+{k}:\s*([^\s#]+)", block) or [None, ""])[1].strip().strip("\"'")
     return one("default"), one("provider")
@@ -144,8 +146,16 @@ def probes_forbidden():
 
 
 def load_tier_b_tasks():
-    panel = json.load(open(os.path.join(BASE, "panel.json"), encoding="utf-8"))
-    return [t for t in panel["tasks"] if t.get("tier") == "B"]
+    """Zadania Tier B z panelu RAZEM z paczkami — jedno źródło dla runnera, panelu i baterii.
+
+    Do 2026-11-09 ta funkcja czytała wyłącznie `panel.json`, więc zadania Tier B z paczek
+    (`packs/<n>/panel.d.json`) NIE BYŁY uruchamiane ani razu, choć panel je deklarował:
+    `harness_eval.tier_b_tasks()` (przez `load_panel`) widział 7, runner widział 5 — dwie
+    odpowiedzi na jedno pytanie. Zadania paczki mają własne checki i sondy (B-003 → `trace_probe`,
+    B-004 → `state_probe`), więc rozbieżność trzymała je MARTWE, a nie „nieaktywne".
+    """
+    from harness_eval import load_panel       # import lokalny (harness_eval importuje tier_b tak samo)
+    return [t for t in load_panel()["tasks"] if t.get("tier") == "B"]
 
 
 # DEFAULT_MODEL usunięty 2026-10-27: martwa zmienna (nikt jej nie czyta), a wstrzykiwana
@@ -236,6 +246,34 @@ def prepare_variant_config(variant_root, gateway_port=""):
     except OSError:
         return False
     return True
+
+
+TRANSPORT_MARKERS = (
+    "http 401", "http 402", "http 403", "http 429", "http 500", "http 502", "http 503", "http 504",
+    "insufficient balance", "billing", "entitlement", "rate limit", "quota",
+    "no usable credentials", "request was not processed", "connectionerror", "connection reset",
+    "connection refused", "temporary failure in name resolution", "ssl", "tls",
+    "read timed out", "no local fallback", "gateway connection failed", "gateway draining",
+)
+
+
+def transport_error(out, err):
+    """Marker czkawki DROGI DO MODELU w wyjściu rolloutu, albo "" (recenzja 2026-11-09, §1.1–1.3).
+
+    Po co: `rollout_started()` rozstrzyga tylko „czy cokolwiek się stało". Gdy w pierwszej turze
+    model zdąży wywołać narzędzie (wiersz w `state.db`), a druga tura padnie na 402/429/502/zerwaniu
+    TLS — rollout „wystartował", więc bramka liczyła to jako `fail` KANDYDATA (twarda przegrana),
+    a nie jako awarię kabli. Odwrotnie też bywało: kandydat, który wpada w pętlę bez wywołania
+    narzędzia, dostawał `infra_error`, choć to jego regresja.
+    Lista jest CELOWO wąska (sformułowania błędów, nie słowa z zadań): „timeout" bez kontekstu
+    występuje w promptach zadań, więc go tu nie ma.
+    """
+    for tekst in (err or "", out or ""):
+        niski = tekst[-4000:].lower()
+        for marker in TRANSPORT_MARKERS:
+            if marker in niski:
+                return marker
+    return ""
 
 
 def free_gateway_port(prefer="inc"):
@@ -407,6 +445,15 @@ def run_task(task, variant_root, label, timeout=420):
     state_path = None
     if state_probe_enabled(task):
         snap_state, snap_error = state_snapshot(task, variant_root)
+        if snap_error:
+            # Stanu sprzed rolloutu nie ma, więc zadanie stanowe NIE MA czego porównać — a jego
+            # pomiar kosztuje tokeny. Przerywamy jako awarię infrastruktury, zamiast płacić za
+            # pomiar, który i tak musi fail-closed (recenzja 2026-11-09, §5.6).
+            return {"status": "infra_error", "task": task["id"], "variant": label, "rc": -1, "wall_s": 0.0,
+                    "scratch": root, "details": [f"snapshot błędu: {snap_error}"],
+                    "summary": (f"INFRA: nie zamroziłem stanu sprzed rolloutu ({snap_error}) — "
+                                f"zadanie stanowe nie ma punktu odniesienia, nie wydaję tokenów"),
+                    "stdout_tail": "", "stderr_tail": ""}
         evidence_dir = os.path.join(EVAL, 'evidence')
         os.makedirs(evidence_dir, exist_ok=True)
         fd, state_path = tempfile.mkstemp(suffix='.state.json', dir=evidence_dir)
@@ -466,8 +513,12 @@ def run_task(task, variant_root, label, timeout=420):
         rc, out, err = 124, (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or ""), "timeout"
     wall = round(time.time() - t0, 1)
 
+    # Sprzątanie PRZED checkiem, nie po: bramka wariantu (dźwigana przez sam rollout, `--idle-exit`)
+    # żyje jeszcze kilka sekund i zadanie czytające /proc (B-002) widziało ją jako „prawdę"
+    # — czyli mierzyło NASZĄ infrastrukturę, a nie stan hosta. To m.in. stąd brała się chwiejność
+    # B-002 (recenzja 2026-11-09, §2.4 i §4.1).
+    stop_variant_gateway(variant_root)
     check = os.path.join(BASE, task["check"])
-    extra = []
     evidence_path = None
     if probe_enabled(task):
         # `evidence_probe` = snapshot katalogu dowodów + ślad (B-006). `trace_probe` = sam ślad,
@@ -495,11 +546,10 @@ def run_task(task, variant_root, label, timeout=420):
         fd, evidence_path = tempfile.mkstemp(suffix='.json', dir=evidence_dir)
         with os.fdopen(fd, 'w') as f:
             json.dump(ev, f, ensure_ascii=False)
-        extra = ['--evidence', evidence_path]
-    if state_path:
-        extra = extra + ['--snapshot', state_path]
     try:
-        c = subprocess.run([sys.executable, check, "--scratch", root, "--variant", variant_root] + extra,
+        c = subprocess.run(check_argv(task, root, variant_root,
+                                      evidence_path=evidence_path or "",
+                                      state_path=state_path or ""),
                            capture_output=True, text=True, timeout=120)
         res = json.loads((c.stdout or "{}").strip().splitlines()[-1] or "{}")
         if not isinstance(res, dict) or res.get('status') not in ('pass', 'fail'):
@@ -515,7 +565,18 @@ def run_task(task, variant_root, label, timeout=420):
         res = {"status": "fail", "summary": f"check artefaktów nie zadziałał: {type(e).__name__}",
                "details": []}
     # Awaria infrastruktury ≠ werdykt o kandydacie: rozdzielamy je PRZED parowaniem.
-    if rc != 0:
+    # Trzy rozłączne przypadki (recenzja 2026-11-09, §1.1–1.3), w tej kolejności:
+    #   (a) w wyjściu jest marker awarii DROGI DO MODELU (także przy `rc == 0`!) — infra,
+    #   (b) rc≠0 i nic nie powstało (brak śladu i artefaktów) — infra,
+    #   (c) reszta — werdykt checka (kandydat realnie coś zrobił albo realnie zawiódł).
+    transport = transport_error(out, err)
+    if transport:
+        res["status"] = "infra_error"
+        res["details"] = ([f"rc={rc}", f"wall_s={wall}", f"marker transportu: {transport!r}"]
+                          + list(res.get("details") or [])[:4])
+        res["summary"] = (f"INFRA: awaria drogi do modelu ({transport!r}) — nie jest to wynik kandydata; "
+                          f"pierwotny powód: {(res.get('summary') or '')[:120]}")
+    elif rc != 0:
         started, trace_rows, produced = rollout_started(root, variant_root, rows_before, task)
         if not started:
             res["status"] = "infra_error"
@@ -533,6 +594,133 @@ def run_task(task, variant_root, label, timeout=420):
     return res
 
 
+def proxy_health(url=None, timeout=5.0):
+    """Czy pośrednik (`hermes proxy`) NAPRAWDĘ odpowiada? Zwraca `(ok, powód)`.
+
+    Po co: 2026-11-09 spaliłem ~25 minut rolloutów, bo `hermes proxy` (startowany z `timeout`)
+    wygasł, a rollout dostawał od modelu „Your request was not processed" i ponawiał próby przez
+    ~5 minut na nogę. Objaw wygląda jak awaria dostawcy, a jest brakiem jednego procesu.
+    Sprawdzenie kosztuje sekundę i oszczędza cały budżet.
+    """
+    url = (url if url is not None else PROXY_URL).strip()
+    if not url:
+        return True, ""                      # brak pośrednika = nie ma czego pilnować
+    import urllib.request
+    baza = url.rstrip("/")
+    ostatni = "brak odpowiedzi"
+    for sciezka in dict.fromkeys([baza + "/models", baza.rstrip("/v1") + "/v1/models"]):
+        try:
+            req = urllib.request.Request(sciezka, headers={"Authorization": "Bearer gate-proxy-local"})
+            with urllib.request.urlopen(req, timeout=timeout) as odp:
+                if 200 <= getattr(odp, "status", 0) < 300:
+                    return True, ""
+        except Exception as e:               # noqa: BLE001 — każdy błąd oznacza „pośrednika nie ma"
+            ostatni = f"{type(e).__name__}: {e}"
+    return False, f"{url} nie odpowiada ({ostatni})"
+
+
+def scenario_outcomes(pairs):
+    """Zwijają pary do wyniku NA ZADANIU: `(rozstrzygnięte, chwiejne, remisy)`.
+
+    Jednostką dowodu jest ZADANIE, nie para (2026-11-09). Powtórzenia tego samego zadania dzielą
+    stan wariantu, więc NIE są niezależnymi obserwacjami — własny artefakt bramki mówił to wprost
+    (`independence is not established`), a stara reguła liczyła je jako `resolved` dowody
+    (3 zadania × 4 powtórzenia dawały „12 rozstrzygnięć" przy 3 niezależnych obserwacjach).
+    Zadanie jest rozstrzygnięte, gdy WSZYSTKIE jego powtórzenia mówią to samo; różne wyniki znaczą
+    zadanie CHWIEJNE, czyli defekt EGZAMINU — przy regule `losses == 0` chwiejność zamienia się
+    w fałszywe odrzucenie kandydata (zmierzone na B-002 2026-11-09). Noga z `infra_error` wyrzuca
+    zadanie z dowodu w całości: awaria kabli nie jest dowodem w żadną stronę.
+    """
+    z = {}
+    for p in pairs:
+        if p.get("early_stop") or "kandydat" not in p:
+            continue                                   # wiersz przerwania, nie para
+        z.setdefault(p["task"], []).append((str(p.get("incumbent")), str(p.get("kandydat"))))
+    rozstrzygnięte, chwiejne, remisy = [], [], []
+    for zadanie, wyniki in z.items():
+        głosy = set()
+        for inc, cand in wyniki:
+            if "infra_error" in (inc, cand):
+                głosy.add("infra")
+            elif inc == "fail" and cand == "pass":
+                głosy.add("wygrana")
+            elif inc == "pass" and cand == "fail":
+                głosy.add("przegrana")
+            else:
+                głosy.add("remis")
+        if "infra" in głosy:
+            continue
+        if len(głosy) > 1:
+            chwiejne.append(zadanie)
+        elif głosy == {"wygrana"}:
+            rozstrzygnięte.append(("wygrana", zadanie))
+        elif głosy == {"przegrana"}:
+            rozstrzygnięte.append(("przegrana", zadanie))
+        else:
+            remisy.append(zadanie)
+    return rozstrzygnięte, chwiejne, remisy
+
+
+def cp_lower(w, n, conf=0.95):
+    """Dolna granica Cloppera–Pearsona dla odsetka wygranych (bez scipy).
+
+    Ogon `P(X >= w | n, p)` ROŚNIE z p, więc szukamy punktu, w którym spada do `1 - conf` —
+    bisekcja od góry. Pierwsza wersja tej funkcji miała odwrócony warunek i zwracała bezsens
+    (`cp_lower(5,5) = 0.0`, `cp_lower(4,4) = 1.0`), co wyglądało jak liczby; dlatego test
+    w `tests/test_tierb_decision.py` porównuje wynik z NIEZALEŻNĄ postacią zamkniętą `α^(1/n)`,
+    a nie z zapisaną stałą.
+    """
+    if n <= 0:
+        return 0.0
+    alpha = 1.0 - conf
+
+    def ogon(p):                                       # P(X >= w | n, p), dokładnie
+        return sum(math.comb(n, k) * p ** k * (1 - p) ** (n - k) for k in range(w, n + 1))
+
+    lo, hi = 0.0, 1.0
+    for _ in range(200):
+        środek = (lo + hi) / 2
+        if ogon(środek) > alpha:
+            hi = środek                                # ogon za duży → p za wysokie
+        else:
+            lo = środek
+    return round((lo + hi) / 2, 6)
+
+
+def check_argv(task, scratch, variant_root, evidence_path="", state_path=""):
+    """Pełne argv checka zadania — JEDNO źródło dla rolloutu, panelu i baterii falsyfikacyjnej.
+
+    Po co osobna funkcja (2026-11-09): gałąź Tier B w `harness_eval.run_check` budowała argv
+    `--variant`/`--home`, a KAŻDY check Tier B ma `--scratch` jako `required=True` (B-006 dodatkowo
+    `--evidence`) — czyli polecenie nie do uruchomienia. Nie biegło w produkcji, więc nikt tego nie
+    widział: klasa „parametr wymagany przez check, niepodawany przez wołającego".
+    Kontrakt jest dwustronny i pilnuje go `tests/test_tierB_falsification.py`: brak wymaganego
+    argumentu i argument NIEDECLAROWANY jednakowo wywalają argparse.
+    """
+    check = task["check"]
+    if not os.path.isabs(check):
+        check = os.path.join(BASE, check)
+    argv = [sys.executable, check, "--scratch", scratch, "--variant", variant_root]
+    if evidence_path:
+        argv += ["--evidence", evidence_path]
+    if state_path:
+        argv += ["--snapshot", state_path]
+    return argv
+
+
+def pair_plan(tasks, repeats):
+    """Plan par: `(powtórzenie, indeks_zadania, zadanie, czy_incumbent_pierwszy)`.
+
+    Kolejność liczona z `(r + k) % 2`, NIE z indeksu planu. Przy parzystej liczbie zadań
+    `i % 2` (gdzie `i = r*K + k`) daje temu samemu zadaniu zawsze tę samą kolejność, więc
+    „naprzemienność" — jedna z niewielu kontrol nad zmiennością rolloutu — znikała dokładnie
+    tam, gdzie miała działać (recenzja zewnętrzna 2026-11-09, §4.2). Wydzielone, bo plan da się
+    przetestować bez wydawania ani jednego tokena.
+    """
+    return [(r, k, t, ((r + k) % 2 == 0))
+            for r in range(max(1, int(repeats))) for k, t in enumerate(tasks)]
+
+
 def paired(incumbent_root, candidate_root, tasks, max_losses=2, budget_s=900, repeats=1):
     """Sekwencyjnie, para po parze, z early stoppingiem (oszczędność tokenów).
 
@@ -542,10 +730,10 @@ def paired(incumbent_root, candidate_root, tasks, max_losses=2, budget_s=900, re
     """
     from harness_eval import sign_test_p
     started = time.time()
-    plan = [t for _ in range(max(1, repeats)) for t in tasks]
+    plan = pair_plan(tasks, repeats)
     pairs, wins, losses, ties, infra_errors = [], [], [], [], []
-    for i, task in enumerate(plan):
-        if i % 2 == 0:
+    for i, (r, k, task, first_inc) in enumerate(plan):
+        if first_inc:
             inc = run_task(task, incumbent_root, "incumbent")
             cand = run_task(task, candidate_root, "kandydat")
         else:
@@ -553,7 +741,7 @@ def paired(incumbent_root, candidate_root, tasks, max_losses=2, budget_s=900, re
             inc = run_task(task, incumbent_root, "incumbent")
         broken = [f"{task['id']}:{lbl}" for lbl, r in (("incumbent", inc), ("kandydat", cand))
                   if r.get("status") == "infra_error"]
-        pairs.append({"task": task["id"], "kolejnosc": ("incumbent,pierwsza" if i % 2 == 0
+        pairs.append({"task": task["id"], "kolejnosc": ("incumbent,pierwsza" if first_inc
                                                         else "kandydat,pierwsza"),
                       "incumbent": inc["status"], "kandydat": cand["status"],
                       "inc_summary": inc.get("summary"), "cand_summary": cand.get("summary"),
@@ -576,11 +764,18 @@ def paired(incumbent_root, candidate_root, tasks, max_losses=2, budget_s=900, re
         if time.time() - started > budget_s:
             pairs.append({"early_stop": f"budżet czasu {budget_s}s wyczerpany"})
             break
+    # Agregacja na SCENARIUSZACH — to ona jest dowodem; pary zostają dla śladu.
+    _roz, _chw, _rem = scenario_outcomes(pairs)
+    _wygr = [t for w, t in _roz if w == "wygrana"]
+    _przegr = [t for w, t in _roz if w == "przegrana"]
     return {"pairs": pairs, "wins": wins, "losses": losses, "ties": ties,
             "infra_errors": infra_errors,
-            "p_value": sign_test_p(len(wins), len(losses)),
+            "p_value": sign_test_p(len(_wygr), len(_przegr)),
             "repeats": max(1, repeats), "planned_pairs": len(plan),
-            "resolved": len(wins) + len(losses),
+            "resolved": len(wins) + len(losses),          # pary: ślad historyczny
+            "resolved_scenarios": len(_roz), "decisive_scenarios": len(_roz),
+            "chwiejne_zadania": _chw, "remisy_scenariuszy": _rem,
             "unique_scenarios": len({t['id'] for t in tasks}),
-            "statistical_claim": "heuristic_only_correlated_repeats",
-            "p_value_note": "descriptive only; repeats share task and variant state, independence is not established"}
+            "statistical_claim": "sign_test_over_decisive_scenarios",
+            "p_value_note": ("powtórzenia służą STABILNOŚCI (wykrywaniu chwiejnego zadania), "
+                             "nie mocy; dowodem są wyłącznie rozstrzygnięte scenariusze")}

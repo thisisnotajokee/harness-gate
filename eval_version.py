@@ -4,7 +4,10 @@ Cel: zmiana progu w watchdogu musi być widoczna jako J_MUTATION, a nie jako
 poprawa/regresja harnessu H. Bez tego rozluźnienie poprzeczki udaje postęp."""
 import hashlib, json, os, re, sys
 
-EVALUATOR_VERSION = "2026-10-15.21"  # .21: limity i parytet czytane z gate.config.json (F2.3)
+EVALUATOR_VERSION = "2026-10-15.22"  # .22: dowód Tier B liczony na SCENARIUSZACH (D1+D2, 2026-11-09):
+#     `tier_b_m_min` 12 -> 6 (jednostką dowodu jest ZADANIE, nie para) oraz auto-`repeats` = 2
+#     (powtórzenia służą stabilności, nie mocy). Zmiana progu decyzyjnego => hash progów się zmienia
+#     => wpis `J_MUTATION` z uzasadnieniem Piotrka.
 # .20: ZMIANA REGUŁ GRY (J_MUTATION), panel 1.4.17 — DOMKNIĘCIE TIER A (kryterium, NIE próg).
 #     Ostatni dług z audytu 29.10: A-004 dopuszczał DWIE kategorie z tym samym `name` (np.
 #     `kat1/foo` + `kat2/foo`), a aktywacja skilla idzie PO NAZWIE — `skill_view(name='foo')`
@@ -248,10 +251,16 @@ EVALUATOR_VERSION = "2026-10-15.21"  # .21: limity i parytet czytane z gate.conf
 # Parametry DECYZYJNE bramki — wchodzą do hasha progów razem z progami watchdogów, żeby
 # „kupienie pewności" (m) i próg istotności (δ) były jawne w wersji J. Zmiana któregokolwiek
 # z nich zmienia hash → wymuszony wpis J_MUTATION (inaczej obniżenie m udawałoby poprawę).
+# D2 (2026-11-09): jednostką dowodu jest ZADANIE (scenariusz), nie para — powtórzenia tego samego
+# zadania dzielą stan wariantu, więc NIE są niezależnymi obserwacjami (własny artefakt bramki:
+# `independence is not established`). Dlatego `tier_b_m_min` znaczy „ile RÓŻNYCH zadań", a nie
+# „ile par": 6 niezależnych zadań bez porażek daje dolną granicę 95% = 0.607 > 0.5, a 12 skorelowanych
+# par dawało 12 „dowodów", których nie było. Zmiana progu decyzyjnego => hash progów się zmienia
+# => wpis `J_MUTATION` z uzasadnieniem Piotrka.
 GATE_PARAMS = {
-    "tier_b_m_min": 12,        # wymagana liczba ROZSTRZYGNIĘTYCH par (wins+losses) dla 1C/2
+    "tier_b_m_min": 6,         # wymagana liczba ROZSTRZYGNIĘTYCH SCENARIUSZY dla klas 1C/2
     "tier_b_delta": 0.2,       # δ z tabeli Hoeffdinga (SPEC §2.4)
-    "tier_b_rule": "losses == 0 and resolved >= m_min",
+    "tier_b_rule": "losses == 0 and decisive_scenarios >= m_min and cp_lower > 0.5",
 }
 PAT = re.compile(r"^\s*([A-Z_]*(?:ALERT|THRESH|LIMIT|MIN|RATIO|BUDGET)[A-Z_]*)\s*=\s*([^#\n]+)",
                  re.M)

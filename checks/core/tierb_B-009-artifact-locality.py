@@ -74,7 +74,13 @@ if len(lines) < 3:
 # plików, nie tworzenia nowych, więc karanie ich byłoby fałszywym alarmem.
 seed = task_seed()
 if not seed:
-    seed = {f"{d}/{f}": "" for d, files in DEFAULT_SEEDED.items() for f in files}
+    # Do 2026-11-09 był tu CICHY fallback na pusty wzorzec, więc przy nieczytelnym `panel.json`
+    # zadanie porównywało pliki z pustym stringiem zamiast zgłosić błąd kontraktu — czyli
+    # mierzyło coś innego, niż deklaruje (recenzja zewnętrzna §5.5). Fail-closed:
+    print(json.dumps({"check": "B-009-artifact-locality", "status": "fail",
+                      "summary": "brak wzorca seed w panel.json — nie mam czego porównywać",
+                      "details": []}, ensure_ascii=False))
+    sys.exit(1)
 seeded_dirs = {rel.split("/")[0] for rel in seed if "/" in rel}
 leaks, reported = [], []
 for rel, original in sorted(seed.items()):

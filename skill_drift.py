@@ -18,7 +18,7 @@ import argparse, hashlib, json, os, shutil, sys, time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
-HOME = os.path.expanduser("~/.hermes")
+HOME = os.path.realpath(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"))
 SKILLS = os.path.join(HOME, "skills")
 MANIFEST = os.path.join(HOME, "eval", "skills-manifest.json")
 LEDGER = os.path.join(HOME, "eval", "ledger.jsonl")

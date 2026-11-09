@@ -63,7 +63,7 @@ objęty manifestem `panel.lock`, więc każda zmiana pliku (gdy istnieje) bez pr
 | `tier_b.model` | str | `""` | Model rolloutu Tier B (`""` → z `config.yaml`) |
 | `tier_b.provider` | str | `""` | Dostawca rolloutu Tier B (`""` → z `config.yaml`) |
 | `tier_b.budget_s` | int | `900` | Budżet czasu rolloutu w sekundach |
-| `tier_b.repeats` | int | `0` | Liczba powtórzeń; `0` → wyliczane z `GATE_PARAMS.tier_b_m_min` i liczby zadań |
+| `tier_b.repeats` | int | `0` | Liczba powtórzeń; `0` → **2** (stabilność: powtórzenia wykrywają zadanie CHWIEJNE). Moc kupujemy liczbą RÓŻNYCH zadań, nie powtórzeniami — te dzielą stan wariantu i nie są niezależnym dowodem |
 | `tier_b.gateway_ports` | list | `[]` | Porty, na których wolno wstać bramce rolloute. **Wymagane**, gdy Hermes dźwiga bramkę w obcym `HERMES_HOME` (dziś: zawsze) — piaskownica wpuszcza tylko wymienione porty, a bramka na porcie losowym dostaje `Permission denied` i rollout pada na `not_ready`. Wariant dostaje `webapp: {enabled: true, port: …}` (pierwszy port = noga incumbent, drugi = kandydat) |
 | `tier_b.proxy` | obj | `{"url":"","provider":"gate-proxy","key_env":"GATE_PROXY_KEY"}` | Lokalny pośrednik (`hermes proxy`) dla dostawców **OAuth** (nous, xai): poświadczenie zostaje po stronie proxy, a rollout dostaje adres i token-atrapę. Gdy `url` jest puste — rollout używa `tier_b.provider`. Port pośrednika jest wyliczany z `url` i automatycznie wpuszczany do piaskownicy |
 
