@@ -14,7 +14,13 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parents[1]
 REPO = BASE
 
-CONFIG_YAML = "model:\n  provider: nous\n  default: deepseek/deepseek-v4.1-flash\n"
+CONFIG_YAML = ("model:\n  provider: nous\n  default: deepseek/deepseek-v4.1-flash\n"
+               # `updates.check: false` NIE jest kosmetyką: `hermes --version` robi synchroniczny
+               # passive update check (`_startup_fast.py` → `check_for_updates`), a cache świeżego
+               # świata jest ZIMNY — więc każde sondowanie A-009 szło do GitHuba (zmierzone:
+               # DNS + HTTPS do 140.82.121.5, 1,91 s; przy throttlingu >60 s → fałszywy FAIL A-009
+               # w `test_install` i w budowie wydania). Świat testowy ma być lokalny i deterministyczny.
+               "updates:\n  check: false\n")
 SKILL = "---\nname: demo\ndescription: test\n---\n\n# Demo\n"
 
 

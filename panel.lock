@@ -38,7 +38,7 @@
     "tests/test_example_pack.py": "a365011b67824c6cda38d62483b92d45dfa77d744c5544404b20b2e7838b9518",
     "tests/test_f6_tierb_infra.py": "5f2af03ce1d0ca44e703e3cad865b584aac1629486f4eeea3604210407bfe58d",
     "tests/test_gate_config.py": "5740ea127485af92c9d3964e1a472a934d53d00acce3a2c68c4844d418739d11",
-    "tests/test_install.py": "7ce9bdbb12b4574d4e750497c7a4f1713e543f14f19a732242e6991cebb5ba2c",
+    "tests/test_install.py": "bb5b7520d45f52f81f2390a1946662d7fb9a83c9a1d4577fcf504cf58be89a1d",
     "tests/test_integrity_guard.py": "cc5d4d1928d0843b044e2f9fea1cfd59d08085737be90e774186996aa4ff81ee",
     "tests/test_review_2026_11_09.py": "b84610de9902a583e6c050892a35effd2a1840065c4df50017d33839c56aa411",
     "tests/test_shared_env_retention.py": "b88737cae78357c402eaf29f06d3910d03531de7e64fa8c5a856192f9aabc033",
@@ -46,7 +46,7 @@
     "tests/test_tierb_decision.py": "4ece27748f292a48b5ff19669bb9e94a3786cf2ee9640ad8748be25f152acb5e",
     "tier_b.py": "e1dba4ad90330d47ab507e97c2eea3b6842b9aef5e5849ad0427d11e6f3e81ed"
   },
-  "generated": "2026-11-09T12:33:26+01:00",
+  "generated": "2026-11-09T12:48:52+01:00",
   "panel_version": "1.5.4",
   "schema_version": 2,
   "uwaga": "Zmiana pliku lub locka zmienia reguły J; wymaga przeglądu i commita człowieka."
