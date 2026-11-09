@@ -1,5 +1,5 @@
 {
-  "panel_version": "1.5.2",
+  "panel_version": "1.5.4",
   "opis": "Panel regresji — RDZEŃ (zadania generyczne, działają u każdego Hermesa). Zadania paczek są scalane deterministycznie z `packs/<nazwa>/panel.d.json`, a lista włączonych paczek siedzi w `gate.config.json` (zmiana = J_MUTATION). A-005 blokuje fail-closed, gdy pliki bramki/runnera odbiegają od panel.lock i git HEAD.",
   "tasks": [
     {

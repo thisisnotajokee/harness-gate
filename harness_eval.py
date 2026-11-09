@@ -833,6 +833,40 @@ def prune_variants(keep=3, max_total_mb=1500):
     return removed
 
 
+def prune_shared_envs(keep=3):
+    """Retencja środowisk zależności we `.shared` — regenerowalne, ważą ~175 MB KAŻDE.
+
+    Zmierzone 2026-11-09: po kilkunastu płatnych przebiegach Tier B katalog
+    `.shared/installs/<install>/environments` urósł do **84 środowisk / 15 GB**, bo każde
+    wywołanie materializuje nowy hash konfiguracji, a `prune_variants` patrzy tylko na
+    katalogi wariantów. `--clean` też ich nie ruszał. Warianty są regenerowalne, więc
+    środowiska też: trzymamy `keep` najnowszych, resztę kasujemy.
+
+    Zwraca `(usunięte_nazwy, zwolnione_MB)`.
+    """
+    base = os.path.join(VARIANTS, ".shared", "installs")
+    removed, freed = [], 0.0
+    if not os.path.isdir(base):
+        return removed, freed
+    for inst in sorted(os.listdir(base)):
+        envdir = os.path.join(base, inst, "environments")
+        if not os.path.isdir(envdir):
+            continue
+        cand = []
+        for name in os.listdir(envdir):
+            p = os.path.join(envdir, name)
+            if os.path.islink(p) or not os.path.isdir(p):
+                continue
+            cand.append((os.path.getmtime(p), name))
+        cand.sort(reverse=True)
+        for _, name in cand[keep:]:
+            p = os.path.join(envdir, name)
+            freed += _size_mb(p)
+            shutil.rmtree(p, ignore_errors=True)
+            removed.append(name)
+    return removed, freed
+
+
 def archive_rejected(artifact, meta):
     """Archiwum odrzuconych kandydatów — żeby nie generować w kółko tego samego."""
     d = os.path.join(HERMES_HOME, "skills", ".candidates", artifact,
@@ -1022,6 +1056,8 @@ def main():
     ap.add_argument("--test-sandbox", action="store_true", help="test 5 SPEC-u")
     ap.add_argument("--no-ledger", action="store_true", help="nie zapisuj werdyktu do ledgera")
     ap.add_argument("--clean", action="store_true", help="usuń warianty i scratch (regenerowalne)")
+    ap.add_argument("--keep-envs", type=int, default=3,
+                    help="ile najnowszych środowisk zależności zachować w `.shared` (reszta kasowana)")
     ap.add_argument("--keep-variants", type=int, default=3,
                     help="ile ostatnich wariantów kandydackich zachować (reszta sprzątana)")
     ap.add_argument("--skip-preflight", action="store_true",
@@ -1128,7 +1164,13 @@ def main():
                 freed += size
         keep = os.path.join(VARIANTS, ".shared")
         os.makedirs(keep, exist_ok=True)
+        envs, env_mb = prune_shared_envs(keep=args.keep_envs)
         print(f"posprzątano {freed / 1e6:.0f} MB (warianty + scratch); współdzielony cache: {keep}")
+        if envs:
+            print(f"  retencja środowisk: usunięto {len(envs)} starych envów ({env_mb:.0f} MB), "
+                  f"zostało {args.keep_envs} najnowszych")
+        elif os.path.isdir(os.path.join(keep, "installs")):
+            print(f"  retencja środowisk: nic do usunięcia (trzymamy {args.keep_envs} najnowszych)")
         return 0
 
     if args.make_variant:

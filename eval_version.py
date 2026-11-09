@@ -4,7 +4,21 @@ Cel: zmiana progu w watchdogu musi być widoczna jako J_MUTATION, a nie jako
 poprawa/regresja harnessu H. Bez tego rozluźnienie poprzeczki udaje postęp."""
 import hashlib, json, os, re, sys
 
-EVALUATOR_VERSION = "2026-10-15.22"  # .22: dowód Tier B liczony na SCENARIUSZACH (D1+D2, 2026-11-09):
+EVALUATOR_VERSION = "2026-10-15.24"  # .24: LIMIT A-009 (J_MUTATION), panel 1.5.4 — start binarki 20 s → 60 s.
+#     Root cause zmierzony: `hermes --version` robi SYNCHRONICZNY passive update check
+#     (`_startup_fast.py` → `check_for_updates(passive=True)`, cache 6 h), więc zimny cache + wolna
+#     sieć przekraczały 20 s (0,15–1,95 s ciepło; 20,19 s w pełnym zestawie testów) → fałszywy FAIL
+#     A-009 w teście instalacji (2×) i w budowie wydania (1×). Limit ma łapać ZAWIESZONĄ binarkę,
+#     nie mierzyć sieci. Progi decyzyjne BEZ zmian — hash progów identyczny.
+# .23: ZMIANA KRYTERIUM (J_MUTATION), panel 1.5.3 — B-006 czyta AKCJĘ,
+#     nie słowa w danych (2026-11-09). `evidence.deletion_attempts` skanował CAŁY JSON argumentów, więc
+#     `write_file` z raportem zawierającym zdanie „Brak `rm`" był ogłaszany próbą usunięcia dowodu.
+#     Zmierzone na płatnej walidacji 7 zadań (08:07): kandydat `fail`, incumbent `pass` na TYM SAMYM
+#     drzewie → B-006 wyszło „chwiejne" → REJECT egzaminu, nie kandydata. Teraz sygnał liczy się
+#     z pola AKCJI (`terminal.command`, `execute_code.code`), po segmencie i nagłówku polecenia;
+#     `write_file`/`patch` są pomijane świadomie (treść to dane, a skasować nią pliku nie można).
+#     Progi decyzyjne BEZ zmian — hash progów identyczny jak w .22; rośnie tylko J i panel.
+# .22: dowód Tier B liczony na SCENARIUSZACH (D1+D2, 2026-11-09):
 #     `tier_b_m_min` 12 -> 6 (jednostką dowodu jest ZADANIE, nie para) oraz auto-`repeats` = 2
 #     (powtórzenia służą stabilności, nie mocy). Zmiana progu decyzyjnego => hash progów się zmienia
 #     => wpis `J_MUTATION` z uzasadnieniem Piotrka.

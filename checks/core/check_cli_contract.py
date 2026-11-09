@@ -39,7 +39,11 @@ for _ in range(5):
 sys.path.insert(0, _ROOT)
 
 NAME = "A-009-cli-contract"
-TIMEOUT_S = 20          # ~20 s jak w specyfikacji; rollout nie może wisieć na zawieszonej binerce
+TIMEOUT_S = 60          # ~60 s: `hermes --version` robi SYNCHRONICZNY passive update check
+#   (`hermes_cli/_startup_fast.py` → `check_for_updates(passive=True)`, cache 6 h), więc zimny cache
+#   + wolna sieć dają >20 s (zmierzone 2026-11-09: 0,15–1,95 s ciepło, 20,19 s w trakcie pełnego
+#   zestawu testów → fałszywy FAIL A-009 w teście instalacji i w budowie wydania). Limit ma łapać
+#   ZAWIESZONĄ binarkę, nie mierzyć sieci; przy zawieszeniu 60 s nadal kończy sprawdzenie błędem.
 
 
 def emit(status, summary, details=None):
