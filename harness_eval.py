@@ -688,7 +688,22 @@ def verdict(comp, klasa, tier_b=None):
         return tier_b_verdict(tier_b, GATE_PARAMS)
     if comp["wins"]:
         return "ACCEPT", f"bez regresji, wygrane na {len(comp['wins'])}: {comp['wins']}"
-    return "REJECT", "brak wygranych — brak dowodu poprawy (remis/identyczny wynik)"
+    # Nagłówek MUSI mówić, o czym mówi. Zmierzone 2026-11-09 (kontrola pozytywna B-003): werdykt
+    # brzmiał „brak wygranych — remis/identyczny wynik", choć w bloku `tier_b` leżały DWIE wygrane
+    # pary (`incumbent=fail`, `kandydat=pass`) — bo klasa 1B nie wlicza Tier B do werdyktu.
+    # Artefakt, który każe czytać „brak wygranych" przy istniejących wygranych, to defekt raportu.
+    powod = (f"Tier A bez wygranych — brak dowodu poprawy (remis/identyczny wynik); "
+             f"klasa {klasa} NIE wlicza Tier B do werdyktu")
+    if tier_b:
+        import tier_b as _tb
+        roz, chw, _rem = _tb.scenario_outcomes(tier_b.get("pairs") or [])
+        wygrane = [t for g, t in roz if g == "wygrana"]
+        przegrane = [t for g, t in roz if g == "przegrana"]
+        powod += (f"; Tier B ZMIERZONY osobno: wygrane={len(wygrane)}, przegrane={len(przegrane)}, "
+                  f"rozstrzygnięte scenariusze={len(roz)}/{GATE_PARAMS.get('tier_b_m_min')}")
+        if chw:
+            powod += f"; chwiejne: {', '.join(chw)}"
+    return "REJECT", powod
 
 
 def save_run(payload, artifact):

@@ -74,6 +74,12 @@ Realne rolloute na kopii drzewa w piaskownicy (Landlock) — mierzy **zachowanie
 tylko pliki. Kosztuje tokeny, więc jest **wyłączony domyślnie** (`tier_b.enabled: false`)
 i uruchamia się wyłącznie przez `--tier-b`.
 
+**Co Tier B widzi, a czego nie — zmierzone, nie założone (2026-11-09).** Egzamin jest czuły na
+**skutek**, nie na treść: skill z wyciętą całą treścią przechodzi (nic nie psuje wyniku), a jedna
+pozornie sensowna, fałszywa instrukcja — która zmienia odpowiedź — jest wykrywana jako regresja.
+Dla Ciebie znaczy to tyle: Tier B **wykryje poprawę wtedy, gdy poprawa zmienia obserwowalny wynik
+zadania**. Nie oceni stylu dokumentacji ani tego, czy skill „ładniej tłumaczy".
+
 Zasady, które warto znać przed włączeniem (wszystkie wymuszone kodem, nie dobrą wolą):
 
 - **Poświadczenie.** Do piaskownicy wchodzą wyłącznie zmienne, których wskazany dostawca
