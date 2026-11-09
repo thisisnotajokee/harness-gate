@@ -565,8 +565,17 @@ def tier_b_verdict(tier_b_result, params):
         return "REJECT", f"Tier B: przegrane na {len(przegrane)} zadaniach: {przegrane}.{uwaga}"
     if tier_b_result.get("infra_errors"):
         broken = tier_b_result["infra_errors"]
+        # Rodzaje awarii z diagnostyki par: `infra_error` mówi „to nie kandydat", ale dopiero rodzaj
+        # mówi, GDZIE IŚĆ (dostawca? limit czasu? izolacja?). Bez tego operator dostaje „powtórz serię".
+        rodzaje = {}
+        for p_ in tier_b_result.get("pairs") or []:
+            for _leg, diag in (p_.get("infra_diag") or {}).items():
+                r_ = (diag or {}).get("rodzaj")
+                if r_:
+                    rodzaje[r_] = rodzaje.get(r_, 0) + 1
+        opis = (" [" + ", ".join(f"{k}: {v}" for k, v in sorted(rodzaje.items())) + "]") if rodzaje else ""
         return "INFRA_ERROR", (
-            f"{len(broken)} noga/nogi rolloutu NIE wystartowały ({broken[:3]}) — awaria drogi do "
+            f"{len(broken)} noga/nogi rolloutu NIE wystartowały ({broken[:3]}){opis} — awaria drogi do "
             f"modelu (klucz/saldo/sieć), nie wynik kandydata; sprawdź provider_health i powtórz serię")
     if chwiejne:
         return "REJECT", (

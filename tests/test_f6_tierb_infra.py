@@ -139,6 +139,47 @@ class DiagnostykaAwariiTest(unittest.TestCase):
         self.assertNotIn(atrapa, tresc, "klucz NIE MOŻE trafić na dysk")
         self.assertNotIn(atrapa, wpis["ogon"], "…ani do artefaktu")
 
+    def test_rodzaje_awarii_z_sygnalow_zaobserwowanych(self):
+        """`infra_error` mówi „to nie kandydat", ale nie mówi GDZIE IŚĆ — to robi `rodzaj`."""
+        self.assertEqual(tier_b.rodzaj_awarii(124), "timeout")
+        self.assertEqual(tier_b.rodzaj_awarii(1, "", "Gateway draining: not_ready"), "sandbox")
+        self.assertEqual(tier_b.rodzaj_awarii(1, "", "sandbox_landlock: Permission denied (port)"),
+                         "sandbox")
+        self.assertEqual(tier_b.rodzaj_awarii(0, "", "", transport="billing exhausted"), "provider")
+        self.assertEqual(tier_b.rodzaj_awarii(1, "", "cos dziwnego"), "brak_startu",
+                         "niepewność nazywamy wprost, nie udajemy wiedzy")
+
+    def test_marker_dostawcy_wyprzedza_limit_czasu(self):
+        """Gdy w wyjściu JEST przyczyna (marker), jest cenniejsza niż nasz limit czasu."""
+        self.assertEqual(tier_b.rodzaj_awarii(124, "", "502", transport="502 bad gateway"), "provider")
+
+    def test_paired_niesie_rodzaj_w_diagnostyce(self):
+        task = {"id": "B-901", "check": "checks/core/tierb_B-002-service-check.py", "prompt": "x"}
+        leg = {"status": "infra_error", "rc": 124, "wall_s": 420.0,
+               "stdout_tail": "", "stderr_tail": "przekroczono limit czasu", "infra_kind": "timeout"}
+
+        def fake_run_task(t, root, label, timeout=420):
+            return leg if label == "kandydat" else {"status": "pass", "summary": "ok", "wall_s": 1.0,
+                                                   "rc": 0, "stdout_tail": "", "stderr_tail": ""}
+
+        with mock.patch.object(tier_b, "EVAL", tempfile.mkdtemp(prefix="eval-test-")), \
+             mock.patch.object(tier_b, "run_task", side_effect=fake_run_task):
+            wynik = tier_b.paired("/inc", "/cand", [task], repeats=1)
+        diag = wynik["pairs"][0]["infra_diag"]["kandydat"]
+        self.assertEqual(diag["rodzaj"], "timeout")
+        self.assertTrue(os.path.isfile(diag["plik"]))
+
+    def test_uzasadnienie_werdyktu_niesie_rodzaje(self):
+        """Operator ma dostać „timeout: 1", a nie tylko „powtórz serię"."""
+        import harness_eval
+        tb = {"pairs": [{"task": "B-900", "incumbent": "pass", "kandydat": "infra_error",
+                         "infra_error": ["B-900:kandydat"],
+                         "infra_diag": {"kandydat": {"rodzaj": "timeout", "rc": 124}}}],
+              "infra_errors": ["B-900:kandydat"]}
+        werdykt, powod = harness_eval.tier_b_verdict(tb, {"tier_b_m_min": 6, "tier_b_delta": 0.2})
+        self.assertEqual(werdykt, "INFRA_ERROR")
+        self.assertIn("timeout: 1", powod, powod)
+
     def test_paired_zanotowuje_diagnostyke_tylko_dla_nogi_awarii(self):
         task = {"id": "B-900", "check": "checks/core/tierb_B-002-service-check.py", "prompt": "x"}
 

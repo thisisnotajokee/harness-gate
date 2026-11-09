@@ -572,6 +572,7 @@ def run_task(task, variant_root, label, timeout=420):
     transport = transport_error(out, err)
     if transport:
         res["status"] = "infra_error"
+        res["infra_kind"] = rodzaj_awarii(rc, out, err, transport=transport)
         res["details"] = ([f"rc={rc}", f"wall_s={wall}", f"marker transportu: {transport!r}"]
                           + list(res.get("details") or [])[:4])
         res["summary"] = (f"INFRA: awaria drogi do modelu ({transport!r}) — nie jest to wynik kandydata; "
@@ -580,6 +581,7 @@ def run_task(task, variant_root, label, timeout=420):
         started, trace_rows, produced = rollout_started(root, variant_root, rows_before, task)
         if not started:
             res["status"] = "infra_error"
+            res["infra_kind"] = rodzaj_awarii(rc, out, err)
             res["details"] = ([f"rc={rc}", f"wall_s={wall}", "ślad w state.db: 0 wierszy",
                                "artefakty poza seedem: 0"]
                               + list(res.get("details") or [])[:4])
@@ -721,6 +723,31 @@ def pair_plan(tasks, repeats):
             for r in range(max(1, int(repeats))) for k, t in enumerate(tasks)]
 
 
+def rodzaj_awarii(rc, out="", err="", transport=""):
+    """Klasyfikuje, JAK zawiodła droga do modelu. `infra_error` mówi „to nie kandydat", ale nie mówi
+    GDZIE IŚĆ, żeby to naprawić — a operator potrzebuje drugiego (2026-11-09: 2 z 28 nóg padły,
+    a raport niósł tylko `rc=1`).
+
+    Klasy i sygnały — WSZYSTKIE zaobserwowane, żadna zgadywana:
+      * `provider`    — w wyjściu marker dostawcy (saldo/limit/„not processed"), czyli transport żył
+                        i odpowiedział odmową;
+      * `timeout`     — `rc == 124`: nasz limit czasu (kable żyją, model nie odpowiada);
+      * `sandbox`     — błąd izolacji (`Permission denied`, `not_ready`, `draining`, `bind`), czyli
+                        rollout padł, ZANIM dotknął modelu;
+      * `brak_startu` — reszta: nie wiemy i mówimy to wprost. Klasa nazywa niepewność, nie udaje
+                        wiedzy — a od punktu 1 towarzyszy jej surowy, zredagowany ślad.
+    """
+    razem = (str(out or "") + "\n" + str(err or "")).lower()
+    if transport:
+        return "provider"
+    if int(rc or 0) == 124:
+        return "timeout"
+    for wzorzec in ("permission denied", "not_ready", "draining", "landlock", "bind "):
+        if wzorzec in razem:
+            return "sandbox"
+    return "brak_startu"
+
+
 def ogon_awarii(leg, task_id, label):
     """Zapisuje ZREDAGOWANY ślad nogi `infra_error` i zwraca wpis diagnostyczny do artefaktu.
 
@@ -744,6 +771,8 @@ def ogon_awarii(leg, task_id, label):
     except OSError as e:                                  # brak zapisu nie może zjeść werdyktu
         sciezka, czysty = "", f"(nie udało się zapisać śladu: {type(e).__name__}) {czysty}"
     return {"rc": leg.get("rc"), "wall_s": leg.get("wall_s"),
+            "rodzaj": leg.get("infra_kind") or rodzaj_awarii(leg.get("rc"), leg.get("stdout_tail"),
+                                                             leg.get("stderr_tail")),
             "ogon": czysty[-600:], "plik": sciezka}
 
 
